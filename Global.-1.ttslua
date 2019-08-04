@@ -1,0 +1,1498 @@
+-- Global Variables
+
+phase   = 0     -- 0 = Join, 1 = Game, 2 = Warning, 3 = Buy/Sell
+delayed = 0     -- Number of matches ongoing during the warning phase.
+eliminated = 0  -- Players who have run out of stars.
+disconnect = 0  -- Players who have left the lobby.
+
+time = "0"          -- Player-set game duration value.
+timeID = nil        -- Return ID of the currently-running Wait function.
+decID  = nil        -- Return ID of the Wait function which controls scoreboard decrements.
+timeSlider = nil    -- Reference to the slider used for setting custom game duration.
+
+-- Array Globals
+
+players = {}    -- All registered players.
+zoneObj = {}    -- The base object for each player's buy UI.
+
+buy  = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0}   -- Buy UI status for each player. 0 = Not Spawned, 1 = Spawned, 2 = Used, 3 = Endgame
+loan = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0}   -- Loan amount for each player, in units of $10k.
+cardDel = {0, 0, 0}                     -- Tracks how many cards have been used and not yet counted.
+
+-- Table Globals: There are three tables to play matches at, each of which has two zones for the two players.
+
+cardPlayed = {["cd3ac0"] = nil, ["20cafb"] = nil, ["e35bb7"] = nil,
+              ["776b36"] = nil, ["496df4"] = nil, ["5cb7b2"] = nil} -- Card object used by each player in a match.
+playing = {["cd3ac0"] = "", ["20cafb"] = "", ["e35bb7"] = "",
+           ["776b36"] = "", ["496df4"] = "", ["5cb7b2"] = ""}       -- Player sitting at each side of each match table.
+status = {["cd3ac0"] = 0, ["20cafb"] = 0, ["e35bb7"] = 0,
+          ["776b36"] = 0, ["496df4"] = 0, ["5cb7b2"] = 0}           -- Player's stage in a match. 0 = Empty/Idle, 1 = Check, 2 = Set
+
+-- Constant Globals
+
+cards = {"Rock", "Paper", "Scissors"}           -- Gives nicknames to each card spawned.
+cardVal = {Rock = 2, Paper = 1, Scissors = 0}   -- Values used to determine match winners.
+
+color = {"White", "Brown", "Red" , "Orange", "Yellow",
+         "Green", "Teal" , "Blue", "Purple", "Pink"}            -- Names of each player color.
+num = {White = 1, Brown = 2, Red  = 3, Orange = 4, Yellow =  5,
+       Green = 6, Teal  = 7, Blue = 8, Purple = 9, Pink   = 10} -- Player number of each color.
+colorRGB = {{1    , 1    , 1    }, {0.443, 0.231, 0.09 },
+            {0.856, 0.1  , 0.094}, {0.956, 0.392, 0.113},
+            {0.905, 0.898, 0.172}, {0.192, 0.701, 0.168},
+            {0.129, 0.694, 0.607}, {0.118, 0.53 , 1    },
+            {0.627, 0.125, 0.941}, {0.96 , 0.439, 0.807}}       -- RGB color value of each player color.
+
+function onLoad()
+    for i, pl in pairs(Player.getAvailableColors()) do  -- On file load, first remove all players from their seats.
+        Player[pl].changeColor("Grey")                  -- (The table uses a non-standard seating arrangement.)
+    end
+
+    -- Object Variable Assignment: Give a name to each pre-existing object in the world.
+
+    zone1  = getObjectFromGUID("11e85e")    -- Player Scripting Zones
+    zone2  = getObjectFromGUID("6723e3")
+    zone3  = getObjectFromGUID("6cf1f2")
+    zone4  = getObjectFromGUID("bd4ef6")
+    zone5  = getObjectFromGUID("f865f3")
+    zone6  = getObjectFromGUID("90a996")
+    zone7  = getObjectFromGUID("64fd28")
+    zone8  = getObjectFromGUID("72f859")
+    zone9  = getObjectFromGUID("a91c77")
+    zone10 = getObjectFromGUID("6b6d19")
+    zoneSW = getObjectFromGUID("cd3ac0")    -- Match Table Scripting Zones
+    zoneNW = getObjectFromGUID("20cafb")
+    zoneS  = getObjectFromGUID("e35bb7")
+    zoneN  = getObjectFromGUID("776b36")
+    zoneSE = getObjectFromGUID("496df4")
+    zoneNE = getObjectFromGUID("5cb7b2")
+    left   = getObjectFromGUID("5c4bf9")    -- Match Tables
+    center = getObjectFromGUID("65ce3b")
+    right  = getObjectFromGUID("68d18c")
+    scoreW = getObjectFromGUID("a6e961")    -- Scoreboards
+    scoreE = getObjectFromGUID("e4d9b7")
+    timerW = getObjectFromGUID("6015ca")    -- Scoreboard Timers
+    timerE = getObjectFromGUID("07541a")
+    box1W  = getObjectFromGUID("a6e961")    -- Scoreboard Casings
+    box1E  = getObjectFromGUID("e4d9b7")
+    box2W  = getObjectFromGUID("98c0f6")
+    box2E  = getObjectFromGUID("9b6cc1")
+    rockW  = getObjectFromGUID("fdd672")    -- Scoreboard Counters
+    rockE  = getObjectFromGUID("58de35")
+    paperW = getObjectFromGUID("aec5f7")
+    paperE = getObjectFromGUID("e447b0")
+    scissW = getObjectFromGUID("b780be")
+    scissE = getObjectFromGUID("4e38ed")
+
+    -- Object-Dependent Globals: Must be defined after object assignment, which must occur during runtime.
+
+    zoneColor = {White  = zone1, Brown = zone2, Red  = zone3, Orange = zone4,
+                 Yellow = zone5, Green = zone6, Teal = zone7, Blue   = zone8,
+                 Purple = zone9, Pink  = zone10}                                -- Assign each player zone to a player.
+    playArr = {zoneSW, zoneNW, zoneS, zoneN, zoneSE, zoneNE,
+               ["cd3ac0"] = zoneSW, ["20cafb"] = zoneNW, ["e35bb7"] = zoneS,
+               ["776b36"] = zoneN , ["496df4"] = zoneSE, ["5cb7b2"] = zoneNE}   -- Assign a number and GUID to each macth table zone.
+    partner = {["cd3ac0"]="20cafb", ["20cafb"]="cd3ac0", ["e35bb7"]="776b36",
+               ["776b36"]="e35bb7", ["496df4"]="5cb7b2", ["5cb7b2"]="496df4"}   -- Group match zones into opposing pairs.
+
+    -- On Load Preparations
+
+    local static  = {left, center, right, timerW, timerE, box1W, box1E,
+                     rockW, rockE, paperW, paperE, scissW, scissE}
+    local gameObj = {left, center, right}
+
+    for i, obj in pairs(static) do  -- Set match tables and scoreboard components as uninteractable.
+        obj.interactable = false
+        obj.tooltip = false
+    end
+    for i, obj in pairs(gameObj) do -- Tag match tables to be removed when the game phase ends.
+        obj.setName("Game")
+    end
+    for i=1, 6 do                   -- Add blank nametag fields to each side of each match table.
+        playArr[i].createButton({
+            click_function = "dummy",
+            label = "",
+            position = {0, 0, -0.36},
+            rotation = {0, 180, 0},
+            width = 0,
+            height = 0,
+            font_size = 1000
+        })
+    end
+end
+
+function onPlayerDisconnect(plyr)   -- On player disconnect, increment disconnect, to be checked by reseat function.
+    disconnect = disconnect + 1
+end
+
+function playerQuit(plyr)   -- If a player disconnects and fails to reconnect:
+    if (Player[plyr].seated == false) then
+        local cardHand = {0, 0, 0}
+        for i, obj in pairs(zoneColor[plyr].getObjects()) do    -- Remove all of their items.
+            if obj.tag == "Card" then							-- Tally and delete the cards in their player zone.
+                countDelete(obj, cardHand)                      
+            else
+                if obj.tag == "Deck" then						-- Tally the contents of the decks in their zone, then delete the decks.
+                    for i, obj in pairs(obj.getObjects()) do
+                        countDelete(obj.name, cardHand, true)
+                    end
+                end
+                obj.destruct()
+            end
+        end
+        for i, obj in pairs(Player[plyr].getHandObjects()) do	-- Tally and delete the cards in their hand.
+            countDelete(obj, cardHand)
+        end
+        for i, pl in pairs(players) do  -- Remove the player from the player table.
+            if (pl == plyr) then
+                table.remove(players, i)
+                return
+            end
+        end
+        buy[num[plyr]] = 0              -- Reset the player's buy UI status.
+        if cardCheck() then
+            return
+        elseif ((#players - eliminated) <= 2) then  -- If there are now less than two remaining players, end the game.
+            Wait.time(||buySell(), 1)
+            return
+        end
+        decrease(cardHand)              -- Update the scoreboard to reflect their removed cards.
+    end
+end
+
+function onPlayerChangeColor(pl)    -- When a player sits or stands:
+    if pl == "Black" then           -- Ignore if a player moves to the GM seat.
+    elseif pl == "Grey" then        -- If the player stood up (became a spectator):
+        if phase == 0 then
+            for i=1, 10 do
+                if Player[color[i]].seated == false and buy[i] == 1 then    -- During join phase, remove buy UI if it exists.
+                    buy[i] = 0
+                    buyDespawn(color[i])
+                end
+            end
+        end
+        for i=1, #players do            -- If player is already registered, force move player back to their seat after 1 frame.
+            if Player[players[i]].seated == false then
+                Wait.frames(||reseat(players[i]), 1)
+            end
+        end
+    else    -- If player sat down:
+        if phase == 0 and buy[num[pl]] == 0 then    -- During join phase, spawn buy UI if it has not already been used.
+            buy[num[pl]] = 1
+            buySpawn(pl)
+        elseif phase >= 1 then          -- If game has started and a non-player sits, force move to spectator after 1 frame.
+            for i, plyr in pairs(players) do
+                if (pl == plyr) then
+                    return
+                end
+            end
+            Wait.frames(||reseat(pl, true), 1)
+        end
+    end
+end
+
+function reseat(pl, bool)
+    if (bool == true) then      -- If bool is true then move non-player to spectator.
+        Player[pl].changeColor("Grey")
+    else
+        if disconnect == 0 then -- If bool is false then move most recent spectator back to their seat.
+            Player.getSpectators()[#Player.getSpectators()].changeColor(pl)
+        else                    -- If player cannot be reseated due to disconnecting, wait two minutes and check for reconnection.
+            disconnect = disconnect - 1
+            Wait.time(||playerQuit(pl), 120)
+        end
+    end
+end
+
+function dummy() end    -- Some buttons are used solely to display text. These buttons, when clicked, run this empty dummy function.
+
+function buySpawn(pl)   -- When a player sits during the join phase, spawn their buy UI.
+    local rot = zoneColor[pl].getRotation()
+    zoneObj[pl] = spawnObject({ -- The base object is a quarter embedded slightly below the surface of the table.
+        type = "Quarter",
+        position = zoneColor[pl].positionToWorld({0, -0.1, 0}),
+        rotation = {0, rot[2], 0}
+    })
+    zoneObj[pl].setLock(true)   -- This quarter is locked, uninteractable, and named according to the player it's in front of.
+    zoneObj[pl].setName(pl)
+    zoneObj[pl].interactable = false
+    zoneObj[pl].createButton({  -- Also spawn a text-button prompting "Choose loan amount"
+        click_function = "dummy",
+        label = "Choose loan amount",
+        position = {0, 1, 3},
+        rotation = {0, 180, 0},
+        width = 0,
+        height = 0,
+        font_size = 700,
+        font_color = {1, 1, 1}
+    })
+    zoneObj[pl].UI.setXmlTable({{   -- A slider ranging from 0 to 10, with an ID of the player who owns it.
+        tag = "Slider",
+        attributes = {
+            id = pl,
+            onValueChanged = "Global/updateValue",
+            maxValue = 10,
+            wholeNumbers = true,
+            position = "0 0 -100",
+            scale = "7 7"
+        }
+    }})
+    zoneObj[pl].createButton({      -- A text-button displaying the currently-selected loan amount.
+        click_function = "dummy",
+        label = "",
+        position = {3.5, 1, -3},
+        rotation = {0, 180, 0},
+        width = 0,
+        height = 0,
+        font_size = 900,
+        font_color = {1, 1, 1}
+    })
+    zoneObj[pl].createButton({      -- A confirm button to lock in the chosen loan amount.
+        click_function = "loanSelect",
+        label = "Confirm",
+        position = {-3, 1, -3},
+        rotation = {0, 180, 0},
+        width = 2700,
+        height = 900,
+        font_size = 700
+    })
+end
+
+function updateValue(plyr, val, id)     -- All loan-select sliders call this same function.
+    local pl = plyr.color
+    if (pl == id) then                  -- If the player is touching their own slider:
+        loan[num[pl]] = tonumber(val)   -- Update their loan value to the slider's value.
+        if val > "0" then               -- Display the selected value, or show blank if the selection is 0.
+            zoneObj[pl].editButton({index = 1, label = "$" .. val .. "0k"})
+        else
+            zoneObj[pl].editButton({index = 1, label = ""})
+        end
+    end
+    zoneObj[id].UI.setAttribute(id, "value", loan[num[id]]) -- Move slider to correct position, even if touched by wrong player.
+end
+
+function loanSelect(par, pl)    -- When player confirms their loan amount:
+    if par.GetName() == pl and loan[num[pl]] > 0 then   -- Do nothing if 0 is the selected value. Otherwise:
+        buyDespawn(pl)          -- Remove their buy UI and set it to 'used' status.
+        buy[num[pl]] = 2
+        local rot = zoneColor[pl].getRotation() 
+        for i=1, 3 do           -- Generate 3 stars in their player zone.
+            local star = spawnObject({
+                type = "Custom_Token",
+                position = zoneColor[pl].positionToWorld({
+                                                      -0.48+(0.16*i), 0, 0.24}),
+                rotation = {0, 180-rot[2], 0},
+                scale = {0.6, 0.6, 0.6}
+            })
+            star.tooltip = false
+            star.setName("Star")
+            star.setCustomObject({
+                image = "https://i.imgur.com/pWRtZV2.png"
+            })
+        end
+        giveCash(pl, loan[num[pl]]) -- Generate a cash stack equal to their selected loan amount.
+        local obj = spawnObject({   -- Create an anchor object to display their debt amount.
+            type = "Quarter",
+            position = zoneColor[pl].positionToWorld({0, -0.1, 0}),
+            rotation = {0, rot[2], 0}
+        })
+        obj.setLock(true)
+        obj.setName("Temp")
+        obj.interactable = false
+        obj.createButton({  -- Spawn a text-button displaying "Your debt is"
+            click_function = "dummy",
+            label = "Your debt is",
+            position = {2.4, 1, -0.5},
+            rotation = {0, 180, 0},
+            width = 0,
+            height = 0,
+            font_size = 700,
+            font_color = {1, 1, 1}
+        })
+        obj.createButton({  -- Along with the debt value, which is 1.4 times the loan value, in units of $10k.
+            click_function = "dummy",
+            label = "$" .. loan[num[pl]]*14 .. "k",
+            position = {2.4, 1, -2.5},
+            rotation = {0, 180, 0},
+            width = 0,
+            height = 0,
+            font_size = 1000,
+            font_color = {1, 0.3, 0.3}
+        })
+        table.insert(players, pl)   -- Add the player to the registered players array.
+        if #players == 2 then       -- Generate the start game button if there are now 2 registered players.
+          startButton()
+        end
+    end
+end
+
+function giveCash(pl, var)  -- Whenever money tokens need to be generated:
+    if (var < 1) then       -- Validate that the stack to be generated contains at least 1 token.
+        return
+    else
+        var = math.floor(var)   -- Round the stack size down to an integer.
+    end
+    local zone = zoneColor[pl]
+    local rot = zone.getRotation()
+    local stack = {}
+    for i=1, var do             -- Generate the desired number of money tokens, each positioned above the previous.
+        local cash = spawnObject({
+            type = "Custom_Model",
+            position = zone.positionToWorld({
+                                                    0.26, (i/19)-0.052, 0}),
+            rotation = {0, 270-rot[2], 0},
+            scale = {1.2, 1.2, 1.2}
+        })
+        cash.setName("× $10k")
+        cash.setCustomObject({
+            mesh = "https://pastebin.com/raw/P4Nrzk9x",
+            diffuse = "https://i.imgur.com/Vjtuxpb.png",
+            convex = true,
+            type = 5,
+            material = 3
+        })
+        table.insert(stack, cash)                   -- Add each money token to a table.
+    end
+    Wait.frames(||giveCash2(zone, rot, stack), 2)   -- Wait 2 frames for all tokens to load, then pass the token table.
+end
+
+function giveCash2(zone, rot, stack)    -- This function stacks the generated money after a 2 frame delay.
+    if #stack > 1 then                  -- Group all given tokens into a stack.
+        stack = group(stack)[1]
+    else
+        stack = stack[1]    -- If there is only one token, it can't be grouped. That token becomes the stack instead.
+    end
+    if (stack ~= nil) then  -- Validate that the stack exists. This check is redundant and should never fail due to prior validation.
+        stack.setPosition(zone.positionToWorld({0.26, 0, 0}))   -- Place the stack in the given player zone.
+        stack.setRotation({0, 270-rot[2], 0})
+    end
+end
+
+function buyDespawn(pl) -- Used to remove the buy-in UI.
+    local obj = zoneColor[pl].getObjects()
+    for i=1, #obj do    -- Destroy all objects in the player's zone. (buyDespawn therefore must be the first step in loanSelect.)
+       destroyObject(obj[i])
+    end
+end
+
+function startButton()  -- Spawns the start game button.
+    local obj = spawnObject({   -- Anchor object.
+        type = "Quarter",
+        position = {0, 5.1, 0},
+    })
+    obj.setLock(true)
+    obj.setName("Start")
+    obj.interactable = false
+    obj.createButton({  -- The start button, labeled "Start" which calls gameWait.
+        click_function = "gameWait",
+        label = "Start",
+        position = {0, 1, 0},
+        rotation = {0, 180, 0},
+        width = 3000,
+        height = 2000,
+        font_size = 1000
+    })
+    obj.createButton({  -- Below it, the "Custom Time" button which calls customTime.
+        click_function = "customTime",
+        label = "Custom Time",
+        position = {0, 1, -4},
+        rotation = {0, 180, 0},
+        width = 3000,
+        height = 800,
+        font_size = 500
+    })
+end
+
+function customTime()   -- The custom time button allows players to choose their game length.
+    local var = getAllObjects()
+    for i=1, #var do    -- Remove the anchor for the start buttons.
+        if var[i].getName() == "Start" then
+            destroyObject(var[i])
+        end
+    end
+    timeSlider = spawnObject({      -- New anchor.
+        type = "Quarter",
+        position = {0, 5.1, 0}
+    })
+    timeSlider.setLock(true)
+    timeSlider.setName("Start")
+    timeSlider.interactable = false
+    timeSlider.UI.setXmlTable({{    -- Spawn slider for selecting time value, ranging from 0 to 12.
+        tag = "Slider",
+        attributes = {
+            onValueChanged = "Global/updateTime",
+            maxValue = 12,
+            wholeNumbers = true,
+            position = "0 180 -100",
+            scale = "7 7"
+        }
+    }})
+    timeSlider.createButton({   -- Blank field for displaying the selected value.
+        click_function = "dummy",
+        label = "",
+        position = {3.5, 1, -2},
+        rotation = {0, 180, 0},
+        width = 0,
+        height = 0,
+        font_size = 900,
+        font_color = {1, 1, 1}
+    })
+    timeSlider.createButton({   -- Time value select button, labeled "Confirm"
+        click_function = "customWait",
+        label = "Confirm",
+        position = {-3, 1, -2},
+        rotation = {0, 180, 0},
+        width = 2700,
+        height = 900,
+        font_size = 700
+    })
+end
+
+function updateTime(a, val) -- Each time the time slider moves:
+    time = val              -- Save the time value.
+    local disp = ""
+    if math.floor(val/6) > 0 then   -- Display the number of hours.
+        disp = math.floor(val/6) .. "h"
+    end
+    if val%6 > 0 then       -- Append the number of minutes.
+        disp = disp .. " " .. val%6 .. "0m"
+    end
+    timeSlider.editButton({label = disp})   -- Update the value display with this string.
+end
+
+function customWait()   -- When confirm is pressed:
+    if time > "0" then  -- Advance to the gameWait function if the selected value is not 0.
+        gameWait(true)
+    end
+end
+
+function gameWait(bool) -- Bool is true only if the selected time was custom.
+    timerW.setValue(11)     -- Scoreboard timers count down from 10 to 0. (Players can still register in this time.)
+    timerE.setValue(11)
+    timerW.Clock.pauseStart()
+    timerE.Clock.pauseStart()
+    if (bool == true) then  -- The correct start function is called when the timers expire.
+        Wait.time(||customStart(), 11)
+    else
+        Wait.time(||gameStart(), 11)
+    end
+    obj = getAllObjects()
+    for i=1, #obj do        -- Remove the anchor for the start buttons.
+        local var = obj[i].getName()
+        if var == "Start" then
+            destroyObject(obj[i])
+        end
+    end
+end
+
+function customStart()  -- When starting the game with a custom time:
+    if time > "0" then  -- Redundant time validation.
+        timerW.setValue((600*time)+1)   -- Time ranges from 1 to 12 in units of 600 sec (10 min). Max value is 7200+1 sec (2 hour).
+        timerE.setValue((600*time)+1)
+        timerW.Clock.pauseStart()
+        timerE.Clock.pauseStart()
+        timeID = Wait.time(||finish(), (600*time)+1)    -- End game function runs when the timer expires.
+        constantStart()
+    end
+end
+
+function gameStart()    -- When starting the game with the default start button:
+    timerW.setValue(((math.floor((#players+3)/2))*600)+1)   -- Time is calculated as 10m per full/partial pair of players + 10m.
+    timerE.setValue(((math.floor((#players+3)/2))*600)+1)   -- Evaluates to 2 = 20m, 3/4 = 30m, 5/6 = 40m, 7/8 = 50m, 9/10 = 60m.
+    timerW.Clock.pauseStart()
+    timerE.Clock.pauseStart()
+    timeID = Wait.time(||finish(), ((math.floor((#players+3)/2))*600)+1)    -- End game function runs when the timer expires.
+    constantStart()
+end
+
+function constantStart()    -- Both time options run this game start function after setting the timers.
+    for i=1, #players do        -- Deal the same 12-card hand to each player.
+        dealHand(players[i])
+    end
+    rockW.setValue(4*#players)  -- Initialize the scoreboard to show the number of cards in-game, 4 of each per player.
+    rockE.setValue(4*#players)
+    paperW.setValue(4*#players)
+    paperE.setValue(4*#players)
+    scissW.setValue(4*#players)
+    scissE.setValue(4*#players)
+    obj = getAllObjects()
+    for i=1, #obj do            -- Remove all lingering buy-in UIs and debt displays.
+        local var = obj[i].getName()
+        if var == "Temp"   or var == "White"  or
+           var == "Brown"  or var == "Red"    or var == "Orange" or
+           var == "Yellow" or var == "Green"  or var == "Teal"   or
+           var == "Blue"   or var == "Purple" or var == "Pink" then
+            destroyObject(obj[i])
+        end
+    end
+    phase = 1   -- Script has now advanced to the "game in progress" state.
+end
+
+function dealHand(pl)   -- Deals a set 12-card hand to the specified player.
+    local rot = zoneColor[pl].getRotation()
+    for i=1, 12 do          -- Deal 12 cards: 4 Rock, 4 Paper, 4 Scissors.
+        spawnObjectJSON({   -- Rock gets nick cards[1] and ID 100, both values increment for the other cards.
+            json = [[{
+                "Name": "Card",
+                "Transform": {"scaleX": 1, "scaleY": 1, "scaleZ": 1},
+                "Nickname": "]] .. cards[math.ceil(i/4)] .. [[",
+                "CardID": ]] .. math.ceil(99+(i/4)) .. [[,
+                "CustomDeck": {
+                "1": {
+                    "FaceURL": "https://i.imgur.com/Os3MpWv.png",
+                    "BackURL": "https://i.imgur.com/mIAFUdn.png",
+                    "NumWidth": 2,
+                    "NumHeight": 2,
+                    "BackIsHidden": true,
+                    }
+                },
+            }]],
+            position = zoneColor[pl].positionToWorld({(0.06*i)-0.39, 0.14, -1.5}),  -- Place each card right of the previous.
+            rotation = ({0, 180-rot[2], 0}),
+            scale = ({1.3, 1, 1.3})
+        })
+    end
+end
+
+function onObjectPickUp(plyr, object)   -- Any time an object is picked up, make sure the player is allowed to do so:
+    for i, pl in pairs(players) do
+        if (pl ~= plyr) then
+            for j, obj in pairs(zoneColor[pl].getObjects()) do  -- Test all objects in all opponents' player zones.
+                if (obj == object) then                         -- If the object picked up is in one of these zones:
+                    object.drop()                               -- Force it to be released and cancel its velocity.
+                    object.setVelocity({0, 0, 0})
+                    return
+                end
+            end
+            for j, car in pairs(Player[pl].getHandObjects()) do -- Do likewise for all cards in opponents' hands.
+                if (car == object) then
+                    object.drop()
+                    object.setVelocity({0, 0, 0})
+                    return
+                end
+            end
+        end
+    end
+end
+
+function onObjectEnterScriptingZone(zone, obj)  -- Any time an object is moved into a zone:
+    if phase == 1 and obj ~= nil then           -- If the game is in progress, check all these conditions:
+        -- Zone is a match table; object is a star; seat is vacant; star is being held; player has cards in their hand.
+        if partner[zone.guid] ~= nil and obj.getName() == "Star" and playing[zone.guid] == "" and obj.held_by_color ~= nil and
+                                                                            #Player[obj.held_by_color].getHandObjects() ~= 0 then
+            signIn(zone, obj.held_by_color)     -- If all conditions are true, player is seated at the match table.
+        end
+        if status[zone.guid] == 0 and status[partner[zone.guid]] == 1 then  -- If partner is already checked and player adds to their wager:
+            status[partner[zone.guid]] = 0      -- Partner becomes unchecked and their check button reappears.
+            checkSpawn(partner[zone.guid])      
+        end
+    end
+end
+
+function onObjectLeaveScriptingZone(zone, obj)  -- Any time an object is removed from a zone:
+    if phase >= 1 and obj ~= nil then           -- If the join phase has already ended:
+        if status[zone.guid] == 0 and status[partner[zone.guid]] == 1 then  -- If partner is checked and player subtracts from their wager:
+            status[partner[zone.guid]] = 0      -- Partner becomes unchecked and their check button reappears.
+            checkSpawn(partner[zone.guid])
+        end
+        if partner[zone.guid] ~= nil and obj.getName() == "Star" then   -- If a star is removed from a match zone:
+            for i=1, #zone.getObjects() do                              -- Check if any stars remain in that zone.
+                if zone.getObjects()[i].getName() == "Star" then
+                    return
+                end
+            end
+            signOut(zone)   -- If not, player is removed from that match zone.
+            local pl = obj.held_by_color
+            local part = partner[zone.guid]
+            if (pl ~= nil) and (playing[part] == "") then   -- If that star was moved to a vacant partner zone:
+                for i, ob in pairs(playArr[part].getObjects()) do
+                    if (ob == obj) then
+                        signIn(getObjectFromGUID(part), pl) -- Player is now seated at that partner zone.
+                    end
+                end
+            end
+        end
+    end
+end
+
+function signIn(zone, plyr) -- When a player becomes seated at a match table:
+    for i, pl in pairs(playing) do  -- Reject the sign-in if the player is already seated at another match table.
+        if (pl == plyr) then
+            return
+        end
+    end
+    local char = #Player[plyr].steam_name
+    if char > 12 then   -- If player name is longer than 12 characters, squish it horizontally to size 12/len.
+        zone.editButton({scale = {(1560/char)/2130, 1, 130/1075}})
+    else
+        zone.editButton({scale = {        130/2130, 1, 130/1075}})  -- Otherwise, display it at the standard size.
+    end
+    zone.editButton({   -- Name text is the player's Steam name, name color is the player's color.
+        label = Player[plyr].steam_name,
+        font_color = colorRGB[num[plyr]]
+    })
+    playing[zone.guid] = plyr   -- Register the player at this match zone.
+    if playing[partner[zone.guid]] ~= "" then   -- If a player is also seated across from them:
+        checkSpawn(zone.guid)                   -- Spawn check buttons for both players.
+        checkSpawn(partner[zone.guid])
+    end
+end
+
+function signOut(zone)  -- When a player stands up from a match table:
+    zone.editButton({label = ""})   -- Clear the name label.
+    if playing[zone.guid] ~= "" then
+        playing[zone.guid] = ""     -- Deregister the player from the match zone.
+        if playing[partner[zone.guid]] ~= "" and status[zone.guid] == 0 then    -- If player had a partner and had not yet checked:
+            zone.removeButton(1)    -- Remove both check buttons.
+            playArr[partner[zone.guid]].removeButton(1)
+            for i=1, #playArr[partner[zone.guid]].getObjects() do   -- Unlock partner's tokens, in case they were locked by a check.
+                if playArr[partner[zone.guid]].getObjects()[i].tag ~= "Board" then
+                    playArr[partner[zone.guid]].getObjects()[i].setLock(false)
+                    playArr[partner[zone.guid]].getObjects()[i].interactable = true
+                end
+            end
+        end
+    end
+    if (phase == 1) then    -- Set the match zone as vacant if the game is in progress.
+        status[zone.guid] = 0
+    end
+end
+
+function checkSpawn(z)  -- This function generates a check button in a given match zone.
+    local zone = playArr[z]
+    zone.createButton({ -- Place the check button relative to the match zone.
+        click_function = "checkPush",
+        label = "Check",
+        position = {0, 0.01, 0.18},
+        rotation = {0, 180, 0},
+        width = 2200,
+        height = 1200,
+        font_size = 1000,
+        scale = {100/2130, 1, 100/1075}
+    })
+    for i=1, #zone.getObjects() do  -- Also unlock all game objects in that zone. (Avoids unlocking anchors or match tables.)
+        if zone.getObjects()[i].getName() == "Star" or
+                                   zone.getObjects()[i].getName() == "× $10k" or
+                                   zone.getObjects()[i].tag       == "Card"   or
+                                   zone.getObjects()[i].tag       == "Deck" then
+            zone.getObjects()[i].setLock(false)
+        end
+    end
+end
+
+function checkPush(zone, pl)    -- When the check button is pressed:
+    if pl == playing[zone.guid] and #Player[pl].getHandObjects() ~= 0 then  -- Confirm the player owns the button and has cards in hand.
+        status[zone.guid] = 1   -- Set the player's status to checked.
+        zone.removeButton(1)
+        local rot = zone.getRotation()
+        local temp = 0
+        local cash = {}
+        local card = {}
+        for i=1, #zone.getObjects() do
+            if zone.getObjects()[i].getName() == "Star" then    -- Align all stars to the left of the zone and lock them.
+                zone.getObjects()[i].setPositionSmooth(zone.positionToWorld({-0.423,
+                    0.01+(0.02*math.floor(temp/3)), 0.349-(0.2095*(temp%3))}))
+                zone.getObjects()[i].setRotationSmooth({
+                                0, 180-rot[2]+(180*(math.floor((temp%6)/3))), 0})
+                zone.getObjects()[i].setLock(true)
+                zone.getObjects()[i].interactable = false
+                temp = temp + 1
+            end
+            if zone.getObjects()[i].getName() == "× $10k" then  -- Collect all money tokens into a table.
+                table.insert(cash, zone.getObjects()[i])
+            end
+            if zone.getObjects()[i].tag == "Card" or zone.getObjects()[i].tag == "Deck" then    -- Collect all cards into a table.
+                table.insert(card, zone.getObjects()[i])
+            end
+        end
+        if #cash > 0 then
+            local cashGroup
+            if #cash > 1 then   -- Group all money tokens into a stack.
+                cashGroup = group(cash)[1]
+            else
+                cashGroup = cash[1]
+            end
+            cashGroup.setPositionSmooth(zone.positionToWorld({0.422, 0.024, 0.15})) -- Set the stack to the right of the zone and lock it.
+            cashGroup.setRotationSmooth({0, 270-rot[2], 0})
+            cashGroup.setLock(true)
+            cashGroup.interactable = false
+        end
+        if #card > 0 then
+            local cardGroup
+            if #card > 1 then   -- Group all cards into a deck.
+                cardGroup = group(card)[1]
+            else
+                cardGroup = card[1]
+            end
+            cardGroup.setPositionSmooth(zone.positionToWorld({-0.218, 0.008, -0.005}))  -- Set the deck to the bottom-left and lock it.
+            cardGroup.setRotationSmooth({0, 90+rot[2], 180})
+            cardGroup.setLock(true)
+            cardGroup.interactable = false
+        end
+        if status[partner[zone.guid]] == 1 then -- If the partner has also checked, spawn both the set buttons.
+            setSpawn(zone)
+            setSpawn(playArr[partner[zone.guid]])
+        end
+    end
+end
+
+function setSpawn(zone) -- Function generates a set button in a given match zone.
+    zone.createButton({ -- Place the set button relative to the match zone.
+        click_function = "setPush",
+        label = "Set",
+        position = {-0.235, 0.01, 0},
+        rotation = {0, 180, 0},
+        width = 1500,
+        height = 1200,
+        font_size = 1000,
+        scale = {100/2130, 1, 100/1075}
+    })
+end
+
+function setPush(zone, pl)  -- When the set button is pushed:
+    if pl == playing[zone.guid] then    -- Check that the correct player is pushing the button.
+        local var = nil
+        for i=1, #zone.getObjects() do  -- Check that there is exactly one new card in the zone.
+            if zone.getObjects()[i].tag == "Card" and zone.getObjects()[i].interactable == true then
+                if var == nil then
+                    var = zone.getObjects()[i]
+                else
+                    return
+                end
+            end
+        end
+        if var ~= nil then  -- If there is exactly one new card:
+            zone.removeButton(1)        -- Remove the set button.
+            cardPlayed[zone.guid] = var -- Save the played card.
+            local rot = zone.getRotation()
+            var.setPositionSmooth(zone.positionToWorld({0, 0.009, 0.173}))  -- Place the card in the zone's center.
+            var.setRotationSmooth({0, 180-rot[2], 180})                     -- Set the card face-down and lock it.
+            var.setLock(true)
+            var.interactable = false
+            status[zone.guid] = 2   -- Update the player's status to set.
+            if status[partner[zone.guid]] == 2 then -- If both players have set, compare their cards after 1.25 seconds.
+                Wait.time(function()
+                    compare({zone, playArr[partner[zone.guid]]})
+                end, 1.25)
+            end
+            return
+        end
+    end
+end
+
+function compare(zoneComp)  -- Given an array of two zones, determine a winner.
+    local cardComp = {}
+    local playerComp = {}
+    local playersNot = {}
+    for i, pl in pairs(Player.getColors()) do   -- Generate a table of all players not in the match.
+        if (pl ~= playing[zoneComp[1].guid]) and (pl ~= playing[zoneComp[2].guid]) then
+            table.insert(playersNot, pl)
+        end
+    end
+    for i, zon in pairs(zoneComp) do    -- For the two zones in the comparison:
+        playerComp[i] = playing[zon.guid]           -- Record the player sitting at that zone.
+        cardComp[i] = cardPlayed[zoneComp[i].guid]  -- Record the card played in each zone.
+        cardComp[i].setLock(false)                  -- Unlock both cards.
+        cardComp[i].interactable = true
+        cardComp[i].setHiddenFrom(playersNot)       -- Hide the card faces from all other players.
+        cardComp[i].flip()                          -- Flip and re-lock both cards.
+        cardComp[i].setPosition(zon.positionToWorld({0, 0.009, 0.173}))
+        cardComp[i].setLock(true)
+    end
+    local var = (cardVal[cardComp[1].getName()] - cardVal[cardComp[2].getName()]) % 3   -- Compare card values with (A-B)%3
+    if var == 0 then    -- If (A-B)%3=0 then A=B. The game is a draw, both players played the same card.
+        local draw = {{}, {}}
+        for i, zon in pairs(zoneComp) do    -- Generate a table of each player's wagered objects.
+            for j, obj in pairs(zon.getObjects()) do
+                if obj ~= cardComp[i] and obj.tag ~= "Board" then
+                    table.insert(draw[i], obj)
+                end
+            end
+            Wait.time(||reward(playing[zon.guid], draw[i]), 4)  -- Return each player's objects after 4 seconds.
+        end
+    else    -- If (A-B)%3=1 if A-B= 2-1, 1-0, or 0-2. Rock=2 and Paper=1, so the second player wins in these 3 cases.
+        local win = {}                      -- Likewise, the first player wins in the 3 cases where (A-B)%3=2
+        for i, zon in pairs(zoneComp) do    -- Collect all wagered objects from both zones into a single table.
+            for j, obj in pairs(zon.getObjects()) do
+                if obj ~= cardComp[i] and obj.tag ~= "Board" then
+                    table.insert(win, obj)
+                end
+            end
+        end
+        Wait.time(||reward(playerComp[3-var], win), 4)  -- After 4 sec, give the winnings to the winning player, 3-var (1 if 2, 2 if 1)
+        Wait.time(||starCheck(playerComp[var]), 5)      -- Wait 1 additional second and check if the loser has any stars remaining.
+    end
+    Wait.time(||discard(zoneComp, cardComp), 4)         -- Regardless of outcome, dispose of the played cards when rewards are given.
+end
+
+function reward(plyr, objs) -- Given a player and an object table, move those objects to the player's zone.
+    local targ = zoneColor[plyr]
+    local rot = targ.getRotation()
+    local var = 0
+    local cash = {}
+    for i, obj in pairs(targ.getObjects()) do   -- Collect all the player's existing money into a table.
+        if obj.getName() == "× $10k" then
+            table.insert(cash, obj)
+        end
+    end
+    local cashBool = false
+    for i, obj in pairs(objs) do    -- Unlock all reward objects.
+        obj.setLock(false)
+        obj.interactable = true
+        if obj.getName() == "Star" then -- Stars fill a 3x3 grid in the player's zone. Extra stars are placed atop the others, flipped 180.
+            while (true) do
+                local pos = targ.positionToWorld({  -- Set the position.
+                    -0.32  + (0.16 * (           var    % 3)),
+                     0.006 + (0.02 * (math.floor(var/9)    )),
+                     0.24  - (0.24 * (math.floor(var/3) % 3))
+                })
+                local hit = Physics.cast({          -- Check if the position is occupied.
+                    origin = pos,
+                    direction = {0, 1, 0},
+                    type = 2,
+                    size = {0.19, 0.19, 0.19},
+                    max_distance = 0.001
+                })
+                if (#hit == 0) then                 -- If not, place the star in that position, increment to the next position, and break.
+                    obj.setPositionSmooth(pos)
+                    obj.setRotationSmooth({0, (180-rot[2]) + (180 * (math.floor(var/9) % 2)), 0})
+                    var = var + 1
+                    break
+                else                                -- If so, increment to the next position and try again.
+                    if (var >= 255) then            -- If the first 256 positions are occupied, place the star in a default spot and break.
+                        obj.setPositionSmooth(targ.positionToWorld({0, 2, 0}))  -- The default is high above the player zone.
+                        obj.setRotationSmooth({0, 180-rot[2], 0})
+                        break
+                    end
+                    var = var + 1
+                end
+            end
+        end
+        if obj.getName() == "× $10k" then   -- Add any money to the table containing the player's own money.
+            table.insert(cash, obj)
+            cashBool = true                 -- cashBool will be true only if there is any new money to give to the player.
+        end
+        if obj.tag == "Card" then           -- Add any cards to the player's hand.
+            obj.deal(1, plyr)
+        end
+        if obj.tag == "Deck" then           -- Add any decks to the player's hand by dealing them out fully.
+            obj.deal(#obj.getObjects(), plyr)
+        end
+    end
+    if (cashBool == true) then  -- If it is necessary to give the player new money:
+        if #cash > 1 then       -- Group all the old and new money together into a stack.
+            cash = group(cash)[1]
+        else
+            cash = cash[1]
+        end
+    else
+        return
+    end
+    cash.setPositionSmooth(targ.positionToWorld({0.26, 0, 0}))  -- Place the money stack at the right of the player's zone.
+    cash.setRotationSmooth({0, 270-rot[2], 0})
+end
+
+function discard(zoneComp, cardComp)    -- This function tallies and disposes the cards played in each match.
+    local playerComp = {}
+    for i, zon in pairs(zoneComp) do    -- Set the two cards as uninteractable, and position them vertically above the disposal slot.
+        local rot = zon.getRotation()
+        playerComp[i] = playing[zon.guid]
+        cardComp[i].interactable = false
+        cardComp[i].setPositionSmooth(zon.positionToWorld({0, 0.22, 0.499}))
+        cardComp[i].setRotationSmooth({270  , 180-rot[2], 0})
+    end
+    Wait.time(||discard2(zoneComp, cardComp, playerComp), 0.8)  -- Wait 0.8 seconds before continuing.
+end
+
+function discard2(zoneComp, cardComp, playerComp)   -- Card disposal sequence, continued.
+    for i, zon in pairs(zoneComp) do
+        cardComp[i].setPositionSmooth(zon.positionToWorld({0, -0.22, 0.499}))   -- Slide the cards into the disposal slot.
+    end                                     -- This will cause them to clip fully inside the match table, the slot is only a texture.
+    Wait.time(||discard3(zoneComp, cardComp, playerComp), 0.7)  -- Wait 0.7 seconds before finishing.
+end
+
+function discard3(zoneComp, cardComp, playerComp)   -- The end of the card disposal sequence.
+    for i, car in pairs(cardComp) do    -- Record and delete both cards.
+        countDelete(car, cardDel)
+    end
+    if phase >= 2 then          -- During the warning phase, decrement the number of in-progress matches.
+        delayed = delayed - 1
+        if (delayed == 0) then  -- If there are now no more in-progress matches, proceed to the buy-sell phase.
+            buySell()
+        else
+            for j, zon in pairs(zoneComp) do    -- Otherwise, delete the table of the concluded match.
+                for k, obj in pairs(zon.getObjects()) do
+                    if obj.getName() == "Game" then
+                        obj.destruct()
+                    end
+                end
+                if (#zon.getButtons() > 0) then -- Delete any labels attached to these tables.
+                    for k=0, #zon.getButtons()-1 do
+                        zon.editButton({index = k, label = ""})
+                    end
+                end
+            end
+            for j, pl in pairs(playerComp) do	-- If player ended the game with cards, remove their cards and stars.
+                cardsRemaining(pl)
+            end
+        end
+    else
+        Wait.frames(||cardCheck(), 1)	-- If not in the warning phase, check the card count after 1 frame.
+    end
+end
+
+function countDelete(card, count, bool)	-- This function handles the tallying and removal of cards.
+    local var
+    if (bool == true) then	-- If bool is true, card is inside a deck container. Else, card is on its own.
+        var = card
+    else
+        var = card.getName()
+    end
+    if var == "Rock" then	-- Increment the target array according to the card being tallied.
+        count[1] = count[1] + 1
+    elseif var == "Paper" then
+        count[2] = count[2] + 1
+    else					-- var == "Scissors" case
+        count[3] = count[3] + 1
+    end
+    if (bool ~= true) then	-- Destroy the card if it is not inside a deck.
+        card.destruct()
+    end
+end
+
+function starCheck(plyr)	-- After a player loses a match, check if they have any stars remaining.
+    for i, obj in pairs(zoneColor[plyr].getObjects()) do	-- Return early if any stars are found. Otherwise, eliminate player.
+        if obj.getName() == "Star" then
+            return
+        end
+    end
+    if ((#players - eliminated) <= 2) then	-- If eliminating this player would bring the participant count below 2, skip to buy-sell phase.
+        Wait.time(||buySell(), 1)
+        return
+    end
+    eliminated = eliminated + 1	-- Increment count of eliminated players.
+    local cardHand = {0, 0, 0}
+    for i, obj in pairs(zoneColor[plyr].getObjects()) do
+        if obj.tag == "Card" then		-- Tally and delete cards in player zone.
+            countDelete(obj, cardHand)
+        elseif obj.tag == "Deck" then	-- Tally decks in player zone, then delete decks.
+            for i, obj in pairs(obj.getObjects()) do
+                countDelete(obj.name, cardHand, true)
+            end
+            obj.destruct()
+        end
+    end
+    for i, obj in pairs(Player[plyr].getHandObjects()) do	-- Tally and delete cards in hand.
+        countDelete(obj, cardHand)
+    end
+    if cardCheck() then	-- If there are now less than two cards remaining, skip to buy-sell phase.
+        return
+    end
+    local rot = zoneColor[plyr].getRotation()
+    local obj = spawnObject({	-- Spawn anchor object in player's zone.
+        type = "Quarter",
+        position = zoneColor[plyr].positionToWorld({0, -0.1, 0}),
+        rotation = {0, rot[2], 0}
+    })
+    obj.setLock(true)
+    obj.setName("Game")
+    obj.interactable = false
+    obj.createButton({	-- Spawn text-buttons displaying "Out of stars" "Wait for buy-sell"
+        click_function = "dummy",
+        label = "Out of stars",
+        position = {2.4, 1, 1},
+        rotation = {0, 180, 0},
+        width = 0,
+        height = 0,
+        font_size = 800,
+        font_color = {1, 0.3, 0.3}
+    })
+    obj.createButton({
+        click_function = "dummy",
+        label = "Wait for buy-sell",
+        position = {2.4, 1, -1},
+        rotation = {0, 180, 0},
+        width = 0,
+        height = 0,
+        font_size = 550,
+        font_color = {1, 1, 1}
+    })
+    decrease(cardHand)	-- Immediately update the scoreboard to reflect the player's deleted cards.
+end
+
+function cardCheck()	-- Each time a card is deleted, check if something must be done.
+    local car = nil
+    local bool = true
+    for i, obj in pairs(getAllObjects()) do	-- Test that at least two cards exist in the game.
+        if obj.tag == "Deck" then
+            bool = false
+            break
+        elseif obj.tag == "Card" then
+            if car == nil then
+                car = obj
+            else
+                bool = false
+                break
+            end
+        end
+    end
+    if (bool == true) then		-- If bool is true, there are less than two cards.
+        buySell(false, true)	-- Therefore, advance to buy-sell, and skip the cards-remaining check.
+        return true
+    elseif (cardDel[1] + cardDel[2] + cardDel[3] >= 6) then	-- If 6 cards (3 matches) were played since the last scoreboard update:
+        decrease(cardDel)									-- Update the scoreboard with this information.
+    end
+    return false
+end
+
+function decrease(card)	-- Given a tally array, rhythmically decrement the scoreboard counters.
+    if (card[1] > 0) then	-- Decrement each scoreboard slot once if applicable.
+        rockW.Counter.decrement()	-- Do the decrementing to both scoreboards.
+        rockE.Counter.decrement()
+        card[1] = card[1] - 1		-- And to the card tallying array.
+    end
+    if (card[2] > 0) then	-- Repeat for all three slots on each scoreboard.
+        paperW.Counter.decrement()
+        paperE.Counter.decrement()
+        card[2] = card[2] - 1
+    end
+    if (card[3] > 0) then
+        scissW.Counter.decrement()
+        scissE.Counter.decrement()
+        card[3] = card[3] - 1
+    end
+    if ((card[1] ~= 0) or (card[2] ~= 0) or (card[3] ~= 0)) then	-- If more decrements must be done:
+        decID = Wait.time(||decrease(card), 0.25)					-- Do so after 0.25 seconds.
+    end
+end
+
+function finish()	-- Runs when time expires. Moves to the warning or buy-sell phase.
+    local keep = {}
+    local remove = {}
+    for zon, var in pairs(playing) do	-- Check all match tables for ongoing matches.
+        if var ~= "" then				-- For each table with a player sitting at it:
+            if (status[zon] ~= 0) and (status[partner[zon]]) ~= 0 then	-- Check if a match is ongoing at a table.
+                table.insert(keep, zon)
+            else
+                local zone = getObjectFromGUID(zon)
+                local objects = {}
+                for i, obj in pairs(zone.getObjects()) do	-- For each occupied table without a match:
+                    if obj.tag ~= "Board" then				-- Record all objects on that table.
+                        table.insert(objects, obj)
+                    end
+                end
+                reward(var, objects)		-- Give those objects back to their owner.
+                table.insert(remove, zon)	-- Assign the table to be removed.
+            end
+        else
+            table.insert(remove, zon)	-- If no one is playing at the table, assign it to be removed.
+        end
+    end
+    if (#keep == 0) then	-- If no tables have ongoing matches:
+        buySell()			-- Advance to the buy-sell phase.
+    else
+        phase = 2			-- Otherwise, advance to the warning phase.
+        delayed = #keep/2	-- The number of matches in progress is the number of pairs of occupied match zones.
+        for i, zon in pairs(keep) do	-- Display a "1 Minute Warning" on each table with an ongoing match.
+            playArr[zon].createButton({
+                click_function = "dummy",
+                label = "1 Minute Warning",
+                position = {0, 0, 0.42},
+                rotation = {0, 180, 0},
+                width = 0,
+                height = 0,
+                font_size = 620,
+                scale = {130/2130, 1, 80/1075},
+                font_color = {1, 0.3, 0.3}
+            })
+        end
+        for i, zon in pairs(remove) do	-- Remove all tables marked for removal.
+            local zone = getObjectFromGUID(zon)
+            for j, obj in pairs(zone.getObjects()) do
+                if obj.getName() == "Game" then
+                    obj.destruct()
+                end
+            end
+        end
+        for i, pl in pairs(players) do	-- For each player not in a match:
+            local bool = true
+            for zon, plyr in pairs(playing) do
+                if (pl == plyr) then
+                    bool = false
+                    break
+                end
+            end
+            if (bool == true) then
+                cardsRemaining(pl)	-- Check if that player ended the game with cards, and remove all their cards/stars if so.
+            end
+        end
+    end
+    timerW.setValue(61)	-- Set the 1 minute timers.
+    timerE.setValue(61)
+    timerW.Clock.pauseStart()
+    timerE.Clock.pauseStart()
+    timeID = Wait.time(function() -- When 1 minute expires:
+        local keep = {}
+        local remove = {}
+        for zon, var in pairs(status) do
+            if (var == 2) and (status[partner[zon]] == 2) then	-- If a table is already in results comparison:
+                table.insert(keep, zon)		-- Mark the table as safe.
+            else
+                table.insert(remove, zon)	-- Otherwise, mark it to be removed.					
+            end
+        end
+        if (#keep == 0) then	-- If no tables are comparing:
+            buySell(true)		-- Skip straight to buy-sell, with a step to delete objects on tables.
+        else
+            delayed = 3 - (#remove/2)	-- Otherwise: count the number of tables in comparison.
+            for i, zon in pairs(remove) do
+                local zone = getObjectFromGUID(zon)
+                if (#zone.getButtons() > 0) then	-- Remove all buttons from non-comparing tables.
+                    for i=0, #zone.getButtons()-1 do
+                        zone.editButton({index = i, label = ""})
+                    end
+                end
+                if (zone.getButtons()[2] ~= nil) then
+                    zone.removeButton(1)
+                end
+                for i, obj in pairs(zone.getObjects()) do	-- Remove all objects from non-comparing tables.
+                    obj.destruct()
+                end
+            end
+        end
+    end, 61)
+end
+
+function cardsRemaining(plyr)	-- Tests a player if they ended the game with cards remaining.
+    if (#Player[plyr].getHandObjects() > 0) then	-- If any cards are in their hand, remove all their stars.
+        for j, obj in pairs(zoneColor[plyr].getObjects()) do
+            if obj.getName() == "Star" then
+                obj.destruct()
+            end
+        end
+    else
+        for j, obj in pairs(zoneColor[plyr].getObjects()) do	-- If any cards or decks are in their zone, remove their stars.
+            if obj.tag == "Card" or obj.tag == "Deck" then
+                for k, obj in pairs(zoneColor[plyr].getObjects()) do
+                    if obj.getName() == "Star" then
+                        obj.destruct()
+                    end
+                end
+                break
+            end
+        end
+    end
+    for i, obj in pairs(Player[plyr].getHandObjects()) do	-- Destroy all cards in their hand, without tallying.
+        obj.destruct()
+    end
+    for i, obj in pairs(zoneColor[plyr].getObjects()) do	-- Destroy all cards/decks in their zone, without tallying.
+        if obj.tag == "Card" or obj.tag == "Deck" then
+            obj.destruct()
+        end
+    end
+end
+
+function buySell(bool, bool2)	-- Initiates the buy-sell phase.
+    phase = 3
+    if (timeID ~= nil) then		-- Stop any currently-running timers.
+        Wait.stop(timeID)
+    end
+    if (decID ~= nil) then
+        Wait.stop(decID)
+    end
+    rockW.setValue(0)			-- Zero out all the scoreboard counters.
+    rockE.setValue(0)
+    paperW.setValue(0)
+    paperE.setValue(0)
+    scissW.setValue(0)
+    scissE.setValue(0)
+    if (bool2 == false) then	-- Check each player for cards remaining, unless the game ended due to no more cards.
+        for i, pl in pairs(players) do
+            cardsRemaining(pl)
+        end
+    end
+    for i, obj in pairs(getAllObjects()) do	-- Remove all cards, decks, and boards.
+        if obj.tag == "Card" or obj.tag == "Deck" or obj.getName() == "Game" then
+            obj.destruct()
+        end
+    end
+    for i=1, 6 do	-- For each match zone, remove all buttons in the zone.
+        if (#playArr[i].getButtons() > 0) then
+            for j=0, #playArr[i].getButtons()-1 do
+                playArr[i].editButton({index = j, label = ""})
+            end
+        end
+        if (playArr[i].getButtons()[2] ~= nil) then
+            playArr[i].removeButton(1)
+        end
+        if (bool == true) then	-- If the buy-sell period ended with ongoing matches, remove all objects in each match zone.
+            for j, obj in pairs(playArr[i].getObjects()) do
+                obj.destruct()
+            end
+        end
+    end
+    local obj = spawnObject({	-- Spawn an anchor object near table center.
+        type = "Quarter",
+        position = {20, 0, 0},
+        rotation = {0, 0, 0}
+    })
+    obj.setLock(true)
+    obj.setName("Buysell")
+    obj.interactable = false
+    obj.createButton({	-- Spawn text-buttons describing the phase rules: "Buy-Sell Period"
+        click_function = "dummy",
+        label = "Buy-Sell Period",
+        position = {0, 1, 2},
+        rotation = {0, 180, 0},
+        width = 0,
+        height = 0,
+        font_size = 1000,
+        font_color = {1, 1, 1}
+    })
+    obj.createButton({	-- "Cash out to sell excess stars for $50k each"
+        click_function = "dummy",
+        label = "Cash out to sell excess stars for $50k each",
+        position = {0, 1, 0},
+        rotation = {0, 180, 0},
+        width = 0,
+        height = 0,
+        font_size = 1000,
+        font_color = {1, 1, 1}
+    })
+    obj.createButton({	-- "Players without 3 stars will be disqualified"
+        click_function = "dummy",
+        label = "Players without 3 stars will be disqualified",
+        position = {0, 1, -2},
+        rotation = {0, 180, 0},
+        width = 0,
+        height = 0,
+        font_size = 1000,
+        font_color = {1, 0.3, 0.3}
+    })
+    local obj = spawnObject({	-- Spawn another adjacent, identical set of text-buttons, rotated 180.
+        type = "Quarter",
+        position = {-20, 0, 0},
+        rotation = {0, 180, 0}
+    })
+    obj.setLock(true)
+    obj.setName("Buysell")
+    obj.interactable = false
+    obj.createButton({
+        click_function = "dummy",
+        label = "Buy-Sell Period",
+        position = {0, 1, 2},
+        rotation = {0, 180, 0},
+        width = 0,
+        height = 0,
+        font_size = 1000,
+        font_color = {1, 1, 1}
+    })
+    obj.createButton({
+        click_function = "dummy",
+        label = "Cash out to sell excess stars for $50k each",
+        position = {0, 1, 0},
+        rotation = {0, 180, 0},
+        width = 0,
+        height = 0,
+        font_size = 1000,
+        font_color = {1, 1, 1}
+    })
+    obj.createButton({
+        click_function = "dummy",
+        label = "Players without 3 stars will be disqualified",
+        position = {0, 1, -2},
+        rotation = {0, 180, 0},
+        width = 0,
+        height = 0,
+        font_size = 1000,
+        font_color = {1, 0.3, 0.3}
+    })
+    for i, pl in pairs(players) do	-- Spawn a cash out button in each player's zone.
+        local rot = zoneColor[pl].getRotation()
+        zoneObj[pl] = spawnObject({	-- Spawn the anchor object.
+            type = "Quarter",
+            position = zoneColor[pl].positionToWorld({0, -0.1, 0}),
+            rotation = {0, rot[2], 0}
+        })
+        zoneObj[pl].setLock(true)
+        zoneObj[pl].setName(pl)
+        zoneObj[pl].interactable = false
+        zoneObj[pl].createButton({ -- Spawn the button in the bottom-left of the player zone.
+            click_function = "cleanPlayer",
+            label = "Cash Out",
+            position = {5.62, 1, -4.25},
+            rotation = {0, 180, 0},
+            width = 1800,
+            height = 600,
+            font_size = 400
+        })
+    end
+    timerW.setValue(301)	-- Set a five-minute timer.
+    timerE.setValue(301)
+    timerW.Clock.pauseStart()
+    timerE.Clock.pauseStart()
+    timeID = Wait.time(||cleanup(), 301)	-- Perform final cleanup when time expires.
+end
+
+function cleanup ()	-- Final cleanup function.
+    timerW.setValue(0)	-- Set both timers to display 0.
+    timerE.setValue(0)
+    for i, pl in pairs(players) do	-- Clean up each player's zone.
+        cleanPlayer(nil, pl)
+    end
+    for i, obj in pairs(getAllObjects()) do	-- Destroy the buy-sell info labels.
+        if obj.getName() == "Buysell" then
+            obj.destruct()
+        end
+    end
+end
+
+function cleanPlayer(parent, pl)	-- Clean up the given player's zone on cash-out.
+    local par = pl					-- If function was called automatically, assume it was called by the player.
+    if (parent ~= nil) then			-- Otherwise, identify who pressed the button.
+        par = parent.getName()
+    end
+    if par == pl and buy[num[pl]] ~= 3 then	-- If the button was pressed by the correct player who has not yet cashed out:
+        buy[num[pl]] = 3
+        local stars = 0
+        local cash = 0
+        for i, obj in pairs(zoneColor[pl].getObjects()) do	-- Remove and tally the player's stars and money.
+            if obj.getName() == "Star" then
+                stars = stars + 1
+            elseif obj.getName() == "× $10k" then
+                local stack = obj.getQuantity()
+                if stack == -1 then	-- If stack == -1 then obj is a singular money token not part of a stack.
+                    cash = cash + 1
+                else
+                    cash = cash + stack
+                end
+            end
+            obj.destruct()	-- Destroy the object once tallied.
+        end
+        local rot = zoneColor[pl].getRotation()
+        local obj = spawnObject({	-- Spawn anchor object to attach final totals to.
+            type = "Quarter",
+            position = zoneColor[pl].positionToWorld({0, -0.1, 0}),
+            rotation = {0, rot[2], 0}
+        })
+        obj.setLock(true)
+        obj.setName("Game")
+        obj.interactable = false
+        if (stars >= 3) then	-- Player must have 3 stars at end of game to get a total.
+            local debt = loan[num[pl]]
+            local net = (cash*10) + ((stars-3)*50) - (debt*14)	-- At end game, excess stars are worth 50k each, loans are repaid +40%
+            if (net >= 0) then			-- If player at least broke even:
+                giveCash(pl, net/10)	-- Generate a stack of money equal to the player's final score, rounded down to nearest 10k.
+                obj.createButton({		-- Spawn text-buttons: "Final profit:" followed by their score.
+                    click_function = "dummy",
+                    label = "Final profit:",
+                    position = {2.4, 1, 1},
+                    rotation = {0, 180, 0},
+                    width = 0,
+                    height = 0,
+                    font_size = 700,
+                    font_color = {1, 1, 1}
+                })
+                obj.createButton({
+                    click_function = "dummy",
+                    label = "+$" .. net .. "k",
+                    position = {2.4, 1, -1},
+                    rotation = {0, 180, 0},
+                    width = 0,
+                    height = 0,
+                    font_size = 1000,
+                    font_color = {0.3, 1, 0.3}
+                })
+            else	-- If player did not break even, instead text-buttons will read "Final debt:" and a negative score.
+                obj.createButton({
+                    click_function = "dummy",
+                    label = "Final debt:",
+                    position = {2.4, 1, 1},
+                    rotation = {0, 180, 0},
+                    width = 0,
+                    height = 0,
+                    font_size = 700,
+                    font_color = {1, 1, 1}
+                })
+                obj.createButton({
+                    click_function = "dummy",
+                    label = "-$" .. -net .. "k",
+                    position = {2.4, 1, -1},
+                    rotation = {0, 180, 0},
+                    width = 0,
+                    height = 0,
+                    font_size = 1000,
+                    font_color = {1, 0.3, 0.3}
+                })
+            end
+        else	-- If player did not end with 3 stars, instead display "Final status:" "DISQUALIFIED"
+            obj.createButton({
+                click_function = "dummy",
+                label = "Final status:",
+                position = {2.4, 1, 1},
+                rotation = {0, 180, 0},
+                width = 0,
+                height = 0,
+                font_size = 700,
+                font_color = {1, 1, 1}
+            })
+            obj.createButton({
+                click_function = "dummy",
+                label = "DISQUALIFIED",
+                position = {2.4, 1, -1},
+                rotation = {0, 180, 0},
+                width = 0,
+                height = 0,
+                font_size = 650,
+                font_color = {1, 0.3, 0.3}
+            })
+        end
+    end
+    for i, pl in pairs(players) do	-- Return if there are still any players who have not cashed out. Otherwise:
+        if buy[num[pl]] ~= 3 then
+            return
+        end
+    end
+    Wait.stop(timeID)	-- Stop any currently-running timers and set the scoreboard clocks to 0.
+    timerW.setValue(0)
+    timerE.setValue(0)
+    for i, obj in pairs(getAllObjects()) do	-- Destroy the buy-sell info labels. 
+        if obj.getName() == "Buysell" then
+            obj.destruct()
+        end
+    end
+    local obj = spawnObject({	-- Spawn an anchor object near the table center.
+        type = "Quarter",
+        position = {20, 0, 0},
+        rotation = {0, 0, 0}
+    })
+    obj.setLock(true)
+    obj.interactable = false
+    obj.createButton({	-- Attach a text-button displaying "Game Over" to indicate the end of the game.
+        click_function = "dummy",
+        label = "Game Over",
+        position = {0, 1, 0},
+        rotation = {0, 180, 0},
+        width = 0,
+        height = 0,
+        font_size = 1000,
+        font_color = {1, 1, 1}
+    })
+    local obj = spawnObject({	-- Spawn another adjacent, identical text-button, rotated 180.
+        type = "Quarter",
+        position = {-20, 0, 0},
+        rotation = {0, 180, 0}
+    })
+    obj.setLock(true)
+    obj.interactable = false
+    obj.createButton({
+        click_function = "dummy",
+        label = "Game Over",
+        position = {0, 1, 0},
+        rotation = {0, 180, 0},
+        width = 0,
+        height = 0,
+        font_size = 1000,
+        font_color = {1, 1, 1}
+    })
+end	-- No further scripting can occur after game over, as no timers are running, and no buttons or stars (button spawners) exist.
