@@ -1,5 +1,6 @@
 # Restricted Rock Paper Scissors
 A Lua-scripted game which runs on the Tabletop Simulator API.
+
 View the Tabletop Simulator API at https://api.tabletopsimulator.com/
 
 View the Steam Workshop page at https://tinyurl.com/SteamRPS
